@@ -1,45 +1,15 @@
 services:
-  wallpaper-api:
+  wallpaper:
     build: .
-    image: wallpaper-api:latest
-    container_name: wallpaper-api
-    restart: unless-stopped
+    image: wallpaperhub
     ports:
-      # IP/HTTP mode.
-      - "8080:8080"
-      # HTTPS mode needs both ports reachable from the internet.
-      - "80:80"
-      - "443:443"
-    volumes:
-      # Issued certificates are persisted here. The volume inherits ownership
-      # from the image, so the unprivileged container user can write to it.
-      - certs:/data/certs
+      - "8787:8787"
     environment:
-      # Wallpapers are read from a GitHub repository and proxied by the service.
-      WALLPAPER_SOURCE: github
-      WALLPAPER_GITHUB_REPO: MinimaxFlora/WallpaperHub
-      WALLPAPER_GITHUB_REF: master
-      WALLPAPER_GITHUB_PATH: images
-      # Optional token to raise the GitHub API rate limit.
-      WALLPAPER_GITHUB_TOKEN: ""
-      WALLPAPER_GITHUB_REFRESH_INTERVAL: 15m
-      # For a local image directory instead, set WALLPAPER_SOURCE: local,
-      # mount ./images read-only, and set WALLPAPER_IMAGES_DIR: /data/images.
-      WALLPAPER_ACME_CACHE_DIR: /data/certs
-      # Set to your domain(s) to enable automatic HTTPS. Leave empty for IP/HTTP mode.
-      # Example: "wall.example.com" or "wall.example.com,cdn.example.com"
-      WALLPAPER_DOMAIN: ""
-      WALLPAPER_ACME_EMAIL: ""
-      # Set to "true" to use the Let's Encrypt staging environment while testing.
-      WALLPAPER_ACME_STAGING: "false"
-      WALLPAPER_ADDR: ":8080"
-      WALLPAPER_HTTP_ADDR: ":80"
-      WALLPAPER_HTTPS_ADDR: ":443"
-      # Leave empty to derive from the domain (HTTPS) or the request Host (HTTP).
-      WALLPAPER_BASE_URL: ""
-      WALLPAPER_COPYRIGHT: My Wallpapers
-      WALLPAPER_TIMEZONE: Asia/Shanghai
-      WALLPAPER_LOG_LEVEL: info
+      WRANGLER_SEND_METRICS: "false"
+      PERSIST_TO: /data
+    volumes:
+      - wallpaper-state:/data
+    restart: unless-stopped
 
 volumes:
-  certs:
+  wallpaper-state:

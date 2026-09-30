@@ -1,6 +1,0 @@
-# WallpaperHub wallpaper API. Served under its own subdomain with automatic
-# HTTPS; requests are proxied to the local plain-HTTP service.
-wallpaper.kejizero.xyz {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:8080
-}

@@ -65,9 +65,34 @@ Entries discovered by the Agent during task execution should follow this format:
 
 [Project Knowledge Summary]
 - Date: 2026-09-30
+- Context: Discovered by Agent while rewriting the project as a Cloudflare Workers application
+- Category: Operations & Deployment
+- Instructions:
+  - The repository is now a single npm package. The Go implementation, its `deploy/` files and `go.mod` were removed; recover them from git history if the old VPS service must be rebuilt.
+  - Storage backend is Workers KV, not R2. The user chose KV to stay inside the free plan without attaching a payment method. Images and `manifest.json` are KV values keyed by repository path.
+  - The Worker is deployed with `npx wrangler deploy`. The agent cannot deploy it: it requires the user's Cloudflare account, a KV namespace id in `wrangler.jsonc` and an API token. Deliver code changes plus manual steps instead of attempting a deploy.
+  - Images are published by the `sync-kv` GitHub Actions workflow, which needs repository secrets `CF_API_TOKEN`, `CF_ACCOUNT_ID` and `KV_NAMESPACE_ID`, plus the optional variable `WALLPAPER_TIMEZONE`.
+  - The old VPS service at `wallpaper.kejizero.xyz` stays live until the DNS record is cut over to the Worker. Cutting over is a user decision; the Go sources remain in git history for rollback.
+  - Migration from the Go version is complete only after byte-for-byte comparison against the old endpoint (`curl -s .../v1/images/01/file | md5sum`).
+
+[Project Knowledge Summary]
+- Date: 2026-09-30
+- Context: Discovered by Agent while verifying the Worker locally
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - Local and Docker runs use `wrangler dev` with a local KV namespace. Seed it first with `node scripts/sync.mjs --target local`, which shells out to `wrangler kv key put --local --persist-to`.
+  - The placeholder `kv_namespaces[0].id` of `REPLACE_WITH_KV_NAMESPACE_ID` works for local development; the user must replace it with the real namespace id before deploying.
+  - KV has no native range reads, so image file responses fetch the whole value and slice it in the Worker. Edge Cache API sits in front, so repeated requests avoid KV reads.
+  - The `unsafe.bindings` rate limiters are reported as "remote" in local dev and their `limit()` call fails without Cloudflare auth; the Worker deliberately falls back to a per-isolate in-memory counter, so local runs never return 429.
+  - `npm install` in this environment can fail with `spawnSync ... esbuild ETXTBSY`; simply re-running it succeeds.
+  - `@cloudflare/workers-types` must stay on major 5 to satisfy wrangler 4's peer dependency. Pinning major 4 breaks `npm install` with ERESOLVE.
+
+[Project Knowledge Summary]
+- Date: 2026-09-30
 - Context: Discovered by Agent while switching wallpaper-api from a local image directory to a GitHub-backed source
 - Category: Operations & Deployment
 - Instructions:
+  - Legacy: this describes the removed Go service, which still runs on the VPS until the DNS cutover.
   - Image source is selected with `WALLPAPER_SOURCE` (`local` or `github`); setting only `WALLPAPER_GITHUB_REPO` implies `github`. GitHub mode requires the repository and serves images by proxying raw GitHub bytes, so clients only ever talk to this service.
   - GitHub mode env vars: `WALLPAPER_GITHUB_REPO` (`owner/name`), `WALLPAPER_GITHUB_REF`, `WALLPAPER_GITHUB_PATH`, `WALLPAPER_GITHUB_TOKEN`, `WALLPAPER_GITHUB_REFRESH_INTERVAL`, plus overridable `WALLPAPER_GITHUB_API_BASE` / `WALLPAPER_GITHUB_RAW_BASE` for mirrors or self-hosted endpoints.
   - The unauthenticated GitHub tree API allows 60 requests/hour per source; the default 15-minute refresh stays well under it. Increase `WALLPAPER_GITHUB_TOKEN` if refreshing more often or reading a private repository.

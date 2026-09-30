@@ -1,3 +1,5 @@
-/wallpaper-api
+node_modules/
+.wrangler/
+coverage/
 /certs
 *.log

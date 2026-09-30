@@ -1,7 +1,9 @@
 .git
 .github
 .monkeycode
-images
+.monkeycode-tmp-files
+node_modules
+.wrangler
 certs
 *.md
 *.log
