@@ -3,7 +3,10 @@
 .monkeycode
 .monkeycode-tmp-files
 node_modules
-.wrangler
+images
 certs
-*.md
+cache
+manifest.json
+metadata.json
 *.log
+*.md

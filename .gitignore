@@ -1,5 +1,8 @@
+/cache
+/certs
+*.log
+
+# Leftovers from the retired Cloudflare Workers setup.
 node_modules/
 .wrangler/
 coverage/
-/certs
-*.log

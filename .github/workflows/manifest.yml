@@ -1,0 +1,44 @@
+name: manifest
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "images/**"
+      - "metadata.json"
+      - "cmd/manifest/**"
+      - "internal/manifest/**"
+      - "internal/imaging/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/manifest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Regenerate manifest
+        run: go run ./cmd/manifest -root . -out manifest.json
+
+      - name: Commit manifest
+        run: |
+          if git diff --quiet -- manifest.json; then
+            echo "manifest.json is unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "chore: regenerate manifest.json"
+          git push

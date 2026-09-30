@@ -1,18 +1,39 @@
-FROM node:22-bookworm-slim
+# syntax=docker/dockerfile:1
 
-WORKDIR /app
+FROM golang:1.27.1-alpine AS build
 
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+WORKDIR /src
 
-COPY tsconfig.json vitest.config.ts wrangler.jsonc ./
-COPY src ./src
-COPY scripts ./scripts
-COPY metadata.json ./metadata.json
-COPY images ./images
+RUN apk add --no-cache ca-certificates
 
-ENV WRANGLER_SEND_METRICS=false
-ENV PERSIST_TO=/data
-EXPOSE 8787
+COPY go.mod go.sum ./
+RUN go mod download
 
-CMD ["npx", "wrangler", "dev", "--ip", "0.0.0.0", "--port", "8787", "--local", "--persist-to", "/data"]
+COPY main.go ./
+COPY internal ./internal
+
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/wallpaper-api . \
+    && mkdir -p /out/certs /out/cache
+
+FROM scratch
+
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/wallpaper-api /wallpaper-api
+# Certificate cache and image cache directories, owned by the unprivileged user.
+COPY --from=build --chown=65532:65532 /out/certs /data/certs
+COPY --from=build --chown=65532:65532 /out/cache /data/cache
+
+USER 65532:65532
+
+ENV WALLPAPER_ADDR=:8080 \
+    WALLPAPER_ACME_CACHE_DIR=/data/certs \
+    WALLPAPER_CACHE_DIR=/data/cache
+
+# 8080 serves IP/HTTP mode; 80 and 443 are used in domain/ACME mode.
+EXPOSE 8080 80 443
+
+ENTRYPOINT ["/wallpaper-api"]

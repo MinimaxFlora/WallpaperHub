@@ -1,15 +1,52 @@
 services:
-  wallpaper:
+  wallpaper-api:
     build: .
-    image: wallpaperhub
-    ports:
-      - "8787:8787"
-    environment:
-      WRANGLER_SEND_METRICS: "false"
-      PERSIST_TO: /data
-    volumes:
-      - wallpaper-state:/data
+    image: wallpaper-api:latest
+    container_name: wallpaper-api
     restart: unless-stopped
+    ports:
+      # IP/HTTP mode.
+      - "8080:8080"
+      # Domain/ACME mode needs both ports reachable from the internet.
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Issued certificates are persisted here.
+      - certs:/data/certs
+      # Image bytes fetched from GitHub are cached here.
+      - cache:/data/cache
+    environment:
+      # Wallpapers live in a GitHub repository; the service reads the committed
+      # manifest and caches image bytes on first request.
+      WALLPAPER_SOURCE: github
+      WALLPAPER_GITHUB_REPO: MinimaxFlora/WallpaperHub
+      WALLPAPER_GITHUB_REF: master
+      # Optional token to raise the GitHub rate limit or read a private repo.
+      WALLPAPER_GITHUB_TOKEN: ""
+      WALLPAPER_MANIFEST_REFRESH_INTERVAL: 15m
+      WALLPAPER_CACHE_DIR: /data/cache
+      # For a local checkout instead, set WALLPAPER_SOURCE: local and mount the
+      # repository read-only at /data/repo with WALLPAPER_ROOT: /data/repo.
+      WALLPAPER_ACME_CACHE_DIR: /data/certs
+      # Set to your domain(s) to enable automatic HTTPS. Leave empty for IP/HTTP
+      # mode. Example: "wall.example.com" or "wall.example.com,cdn.example.com".
+      WALLPAPER_DOMAIN: ""
+      WALLPAPER_ACME_EMAIL: ""
+      # Set to "true" to use the Let's Encrypt staging environment while testing.
+      WALLPAPER_ACME_STAGING: "false"
+      WALLPAPER_ADDR: ":8080"
+      WALLPAPER_HTTP_ADDR: ":80"
+      WALLPAPER_HTTPS_ADDR: ":443"
+      # Leave empty to derive the public URL from the domain or request Host.
+      WALLPAPER_BASE_URL: ""
+      WALLPAPER_TIMEZONE: Asia/Shanghai
+      WALLPAPER_RATELIMIT_LIMIT: "120"
+      WALLPAPER_RATELIMIT_WINDOW: 1m
+      # Comma-separated origins allowed to fetch image bytes; empty allows all.
+      # Example: "example.com,*.example.com"
+      WALLPAPER_HOTLINK_ALLOWLIST: ""
+      WALLPAPER_LOG_LEVEL: info
 
 volumes:
-  wallpaper-state:
+  certs:
+  cache:
