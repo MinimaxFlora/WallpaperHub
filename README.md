@@ -2,8 +2,8 @@
 
 自托管的壁纸 REST API，用 Go 编写。图片存放在 GitHub 仓库，推送后由 GitHub Actions
 重新生成 `manifest.json` 并提交回仓库；服务读取清单，对外提供检索、筛选与四种取图模式，
-图片字节从 GitHub 拉取后写入本地磁盘缓存。用 Docker Compose 部署，可选用内置 ACME 自动签发
-HTTPS 证书。
+图片字节从 GitHub 拉取后写入本地磁盘缓存。用 Docker Compose 部署，TLS 与证书签发交给
+搭配的 Caddy 容器。
 
 ## 架构
 
@@ -12,10 +12,11 @@ flowchart LR
     A["GitHub Repo"] -->|"push images or metadata"| B["GitHub Actions"]
     B -->|"go run ./cmd/manifest"| C["manifest.json"]
     C -->|"commit back"| A
-    D["Client"] -->|"HTTPS"| E["wallpaper-api"]
+    D["Client"] -->|"HTTPS"| G["caddy"]
+    G -->|"reverse proxy"| E["wallpaper-api"]
     E -->|"read manifest"| A
     E -->|"fetch and cache bytes"| F["Disk Cache"]
-    E -->|"serve"| D
+    G -->|"serve"| D
 ```
 
 请求链路：
@@ -101,38 +102,52 @@ WALLPAPER_SOURCE=local WALLPAPER_MANIFEST_PATH=./manifest.json go run .
 
 ## Docker Compose 部署
 
-默认 `docker-compose.yml` 使用 GitHub 模式，图片直接从 `MinimaxFlora/WallpaperHub` 拉取。
+栈里有两个容器：`wallpaper-api` 提供接口，`caddy` 占用 80/443、自动申请续期证书并反向代理到
+API。API 容器不对外暴露端口。默认 `docker-compose.yml` 使用 GitHub 模式，图片直接从
+`MinimaxFlora/WallpaperHub` 拉取。
 
-### 域名模式（自动 HTTPS）
+### 域名部署（自动 HTTPS）
 
 1. 把域名解析到服务器，确保 80 与 443 可从公网访问，且没有其他服务占用这两个端口。
-2. 编辑 `docker-compose.yml`：取消 `80:80` 与 `443:443` 两行端口映射的注释，再填入域名与邮箱：
-
-```yaml
-WALLPAPER_DOMAIN: wall.example.com
-WALLPAPER_ACME_EMAIL: you@example.com
-```
-
-3. 启动：
+2. 在项目目录创建 `.env`，填入域名和对外地址：
 
 ```bash
-# 首次先用 staging 验证，避免触发 Let's Encrypt 速率限制
-WALLPAPER_ACME_STAGING=true docker compose up -d --build
+# 站点域名，Caddy 据此申请证书
+WALLPAPER_DOMAIN=wall.example.com
+
+# 响应里绝对 URL 的前缀
+WALLPAPER_BASE_URL=https://wall.example.com
 ```
 
-4. 确认签发成功后，把 `WALLPAPER_ACME_STAGING` 设为 `false`，重新启动：
+3. 构建并启动：
 
 ```bash
 docker compose up -d --build
 ```
 
-证书存放在 `certs` 卷，容器重启不会丢失。
+4. 第一次启动时 Caddy 会申请证书，用 `docker compose logs -f caddy` 观察签发结果。
 
-### IP/HTTP 模式
+证书存放在 `caddy_data` 卷，容器重建不会丢失。
 
-不设 `WALLPAPER_DOMAIN`，服务只监听 8080，用 `http://<ip>:8080` 访问。适合内网或由外部
-反向代理终止 TLS 的场景。反向代理时把 `WALLPAPER_BASE_URL` 设为对外的公开地址，服务会用它
-生成响应中的绝对 URL。
+### 本地试用
+
+不设 `WALLPAPER_DOMAIN` 时默认用 `localhost`，Caddy 会签发本地自签证书，用
+`https://localhost` 访问。也可以只跑 API 容器，用 `docker compose up -d wallpaper-api`
+后通过 `http://localhost:8080` 访问（此时需要在 compose 里临时给 API 加上端口映射）。
+
+### 其他站点共用这台 Caddy
+
+`caddy` 容器默认加载仓库内的 `deploy/caddy/Caddyfile`，站点地址取自 `WALLPAPER_DOMAIN`。
+如果同一台机器上还有别的站点要挂到这个 Caddy，把 `WALLPAPER_CADDYFILE` 指向服务器上的
+自定义 Caddyfile 即可：
+
+```bash
+# .env
+WALLPAPER_CADDYFILE=/opt/wallpaper-api/caddy/Caddyfile
+```
+
+自定义 Caddyfile 里照抄 wallpaper 站点块，再追加其他站点。若其他站点要读容器外的目录，
+在服务器上放一个 `docker-compose.override.yml` 补充只读挂载。
 
 ### 本地目录模式
 
@@ -161,18 +176,19 @@ WALLPAPER_MANIFEST_PATH: /data/repo/manifest.json
 | `WALLPAPER_ROOT` | `.` | 本地模式的根目录 |
 | `WALLPAPER_CACHE_DIR` | `./cache` | 图片缓存目录 |
 | `WALLPAPER_ADDR` | `:8080` | HTTP 监听地址 |
-| `WALLPAPER_DOMAIN` | 空 | 逗号分隔的域名，设置后启用 HTTPS |
-| `WALLPAPER_ACME_EMAIL` | 空 | ACME 账户邮箱 |
-| `WALLPAPER_ACME_CACHE_DIR` | `./certs` | 证书缓存目录 |
-| `WALLPAPER_ACME_STAGING` | `false` | 使用 Let's Encrypt staging |
-| `WALLPAPER_HTTP_ADDR` | `:80` | 域名模式下接收 ACME 挑战的地址 |
-| `WALLPAPER_HTTPS_ADDR` | `:443` | 域名模式下的 HTTPS 地址 |
-| `WALLPAPER_BASE_URL` | 由域名或请求 Host 推导 | 响应中绝对 URL 的前缀 |
+| `WALLPAPER_BASE_URL` | 由转发头和请求 Host 推导 | 响应中绝对 URL 的前缀 |
 | `WALLPAPER_TIMEZONE` | `Local` | `daily` 模式使用的时区，如 `Asia/Shanghai` |
 | `WALLPAPER_RATELIMIT_LIMIT` | `120` | 每窗口请求上限，`0` 关闭限流 |
 | `WALLPAPER_RATELIMIT_WINDOW` | `1m` | 限流窗口 |
 | `WALLPAPER_HOTLINK_ALLOWLIST` | 空 | 允许取图的来源，逗号分隔，支持 `*.example.com`；留空放行全部 |
 | `WALLPAPER_LOG_LEVEL` | `info` | `debug`、`info`、`warn` 或 `error` |
+
+以下变量只影响 Compose 栈的 Caddy 容器，不由 Go 服务读取：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WALLPAPER_DOMAIN` | `localhost` | Caddy 站点地址，即证书域名 |
+| `WALLPAPER_CADDYFILE` | `./deploy/caddy/Caddyfile` | Caddy 容器加载的配置文件 |
 
 ## 添加图片
 

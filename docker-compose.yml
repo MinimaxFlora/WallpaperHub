@@ -1,19 +1,33 @@
+# Wallpaper API stack: a Caddy container terminates TLS and reverse-proxies to
+# the API container, which never binds a public port itself.
 services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: wallpaper-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # Site address for the Caddyfile, for example wallpaper.example.com.
+      WALLPAPER_DOMAIN: ${WALLPAPER_DOMAIN:-localhost}
+    volumes:
+      # Override with WALLPAPER_CADDYFILE to point at a host-specific Caddyfile.
+      - ${WALLPAPER_CADDYFILE:-./deploy/caddy/Caddyfile}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - wallpaper-api
+
   wallpaper-api:
     build: .
     image: wallpaper-api:latest
     container_name: wallpaper-api
     restart: unless-stopped
-    ports:
-      # IP/HTTP mode. Keep this when a reverse proxy terminates TLS in front.
-      - "8080:8080"
-      # Domain/ACME mode needs both ports reachable from the internet and no
-      # other service holding them. Uncomment, then set WALLPAPER_DOMAIN.
-      # - "80:80"
-      # - "443:443"
+    expose:
+      - "8080"
     volumes:
-      # Issued certificates are persisted here.
-      - certs:/data/certs
       # Image bytes fetched from GitHub are cached here.
       - cache:/data/cache
     environment:
@@ -28,18 +42,10 @@ services:
       WALLPAPER_CACHE_DIR: /data/cache
       # For a local checkout instead, set WALLPAPER_SOURCE: local and mount the
       # repository read-only at /data/repo with WALLPAPER_ROOT: /data/repo.
-      WALLPAPER_ACME_CACHE_DIR: /data/certs
-      # Set to your domain(s) to enable automatic HTTPS. Leave empty for IP/HTTP
-      # mode. Example: "wall.example.com" or "wall.example.com,cdn.example.com".
-      WALLPAPER_DOMAIN: ""
-      WALLPAPER_ACME_EMAIL: ""
-      # Set to "true" to use the Let's Encrypt staging environment while testing.
-      WALLPAPER_ACME_STAGING: "false"
       WALLPAPER_ADDR: ":8080"
-      WALLPAPER_HTTP_ADDR: ":80"
-      WALLPAPER_HTTPS_ADDR: ":443"
-      # Leave empty to derive the public URL from the domain or request Host.
-      WALLPAPER_BASE_URL: ""
+      # Public URL used to build absolute links. Leave empty to derive from the
+      # request's forwarded headers.
+      WALLPAPER_BASE_URL: ${WALLPAPER_BASE_URL:-}
       WALLPAPER_TIMEZONE: Asia/Shanghai
       WALLPAPER_RATELIMIT_LIMIT: "120"
       WALLPAPER_RATELIMIT_WINDOW: 1m
@@ -49,5 +55,6 @@ services:
       WALLPAPER_LOG_LEVEL: info
 
 volumes:
-  certs:
+  caddy_data:
+  caddy_config:
   cache:

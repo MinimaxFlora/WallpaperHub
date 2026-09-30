@@ -13,12 +13,9 @@ import (
 // Default values used when the corresponding environment variable is unset.
 const (
 	DefaultAddr           = ":8080"
-	DefaultHTTPAddr       = ":80"
-	DefaultHTTPSAddr      = ":443"
 	DefaultRoot           = "."
 	DefaultManifestPath   = "./manifest.json"
 	DefaultCacheDir       = "./cache"
-	DefaultACMECacheDir   = "./certs"
 	DefaultCopyright      = "Wallpaper Collection"
 	DefaultTimezone       = "Local"
 	DefaultLogLevel       = "info"
@@ -48,16 +45,6 @@ type Config struct {
 	Location  *time.Location
 	LogLevel  slog.Level
 
-	// Domains holds the ACME host names. When empty the service runs plain HTTP
-	// (IP) mode; when set it serves HTTPS with automatically issued Let's
-	// Encrypt certificates.
-	Domains      []string
-	ACMEEmail    string
-	ACMECacheDir string
-	ACMEStaging  bool
-	HTTPAddr     string
-	HTTPSAddr    string
-
 	// Source selects where wallpapers come from: "local" or "github".
 	Source string
 	// GitHub holds the repository settings used when Source is "github".
@@ -83,9 +70,6 @@ type Config struct {
 	// An empty list allows every origin.
 	HotlinkAllowlist []string
 }
-
-// TLS reports whether the service should run in HTTPS/ACME mode.
-func (c Config) TLS() bool { return len(c.Domains) > 0 }
 
 // UsesGitHub reports whether wallpapers are read from a GitHub repository.
 func (c Config) UsesGitHub() bool { return c.Source == SourceGitHub }
@@ -121,13 +105,6 @@ func Load() Config {
 		Timezone:  getString("WALLPAPER_TIMEZONE", DefaultTimezone),
 		LogLevel:  parseLevel(getString("WALLPAPER_LOG_LEVEL", DefaultLogLevel)),
 
-		Domains:      parseHostList(getString("WALLPAPER_DOMAIN", "")),
-		ACMEEmail:    getString("WALLPAPER_ACME_EMAIL", ""),
-		ACMECacheDir: getString("WALLPAPER_ACME_CACHE_DIR", DefaultACMECacheDir),
-		ACMEStaging:  getBool("WALLPAPER_ACME_STAGING", false),
-		HTTPAddr:     getString("WALLPAPER_HTTP_ADDR", DefaultHTTPAddr),
-		HTTPSAddr:    getString("WALLPAPER_HTTPS_ADDR", DefaultHTTPSAddr),
-
 		Source:        parseSource(source),
 		GitHubRepo:    repo,
 		GitHubRef:     getString("WALLPAPER_GITHUB_REF", DefaultGitHubRef),
@@ -144,12 +121,6 @@ func Load() Config {
 		HotlinkAllowlist: parseHostList(getString("WALLPAPER_HOTLINK_ALLOWLIST", "")),
 	}
 	cfg.Location = loadLocation(cfg.Timezone)
-
-	// In domain mode the public base URL is derived from the primary domain
-	// unless it was set explicitly.
-	if cfg.TLS() && cfg.BaseURL == "" {
-		cfg.BaseURL = "https://" + cfg.Domains[0]
-	}
 	return cfg
 }
 
@@ -205,21 +176,6 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
-}
-
-func getBool(key string, fallback bool) bool {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
-	}
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
 }
 
 func loadLocation(name string) *time.Location {
@@ -286,16 +242,11 @@ func normalizeHost(raw string) string {
 
 // String renders the configuration for startup logging.
 func (c Config) String() string {
-	mode := "http(ip)"
-	if c.TLS() {
-		mode = "https(acme)"
-	}
-	base := fmt.Sprintf("mode=%s source=%s addr=%s base_url=%q timezone=%s log_level=%s ratelimit=%d/%s",
-		mode, c.Source, c.Addr, c.BaseURL, c.Timezone, c.LogLevel, c.RateLimitLimit, c.RateLimitWindow)
+	base := fmt.Sprintf("source=%s addr=%s base_url=%q timezone=%s log_level=%s ratelimit=%d/%s",
+		c.Source, c.Addr, c.BaseURL, c.Timezone, c.LogLevel, c.RateLimitLimit, c.RateLimitWindow)
 	if c.UsesGitHub() {
 		return base + fmt.Sprintf(" github_repo=%s github_ref=%s manifest_refresh=%s cache_dir=%s",
 			c.GitHubRepo, c.GitHubRef, c.ManifestRefreshInterval, c.CacheDir)
 	}
-	return base + fmt.Sprintf(" root=%s manifest=%s http_addr=%s https_addr=%s domains=%v",
-		c.Root, c.ManifestPath, c.HTTPAddr, c.HTTPSAddr, c.Domains)
+	return base + fmt.Sprintf(" root=%s manifest=%s", c.Root, c.ManifestPath)
 }

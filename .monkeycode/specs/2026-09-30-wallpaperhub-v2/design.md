@@ -10,7 +10,7 @@ Updated: 2026-09-30
 - 图片以 GitHub 仓库为唯一人工编辑入口，推送后由 GitHub Actions 生成 `manifest.json` 并提交回仓库。
 - 服务读取清单，从 GitHub 拉取图片字节并写入本地磁盘缓存，对外提供检索、筛选、取图接口。
 - 取图支持 `random` / `seed` / `daily` / `session` 四种模式，参数切换。
-- 用 Docker 与 Docker Compose 部署，可选内置 ACME 自动签发 HTTPS。
+- 用 Docker 与 Docker Compose 部署，栈内 Caddy 容器负责 TLS 证书与反向代理。
 
 服务只提供原生 REST 接口，不含必应兼容路由，也不依赖 Cloudflare。
 
@@ -37,7 +37,7 @@ flowchart LR
 
 分层职责：
 
-- 边缘层（可选反向代理或内置 ACME）：TLS、基础防护。
+- 边缘层（栈内的 Caddy 容器）：TLS 证书签发与续期、反向代理、基础防护。
 - 业务层：路由、筛选、取图模式、清单解析、错误规范、限流、防盗链。
 - 存储层：清单来源（本地文件或 HTTP）与图片字节（本地目录或 GitHub raw + 磁盘缓存）。
 - 数据层：GitHub 仓库中的图片、元数据与清单。
@@ -49,7 +49,7 @@ flowchart LR
 仓库为单一 Go 模块，图片与元数据保留在根目录。
 
 ```
-main.go                     # 启动、清单刷新、HTTP/TLS 监听
+main.go                     # 启动、清单刷新、HTTP 监听
 cmd/manifest/main.go        # 清单生成器
 internal/config/            # 环境变量配置
 internal/manifest/          # 清单模型与解析
@@ -61,7 +61,7 @@ internal/store/             # 图片字节：本地目录或 GitHub raw + 磁盘
 internal/imaging/           # 宽高解析（含最小化 AVIF 解析）
 internal/errs/              # 结构化错误
 internal/server/            # 路由、序列化、限流、防盗链、日志
-internal/acme/              # autocert 封装
+deploy/caddy/Caddyfile      # Caddy 容器站点配置
 images/                     # 图片目录
 metadata.json               # 人工维护的元数据源
 manifest.json               # 生成的清单，提交在仓库中
@@ -237,12 +237,12 @@ GitHub 拉取失败时返回 503 并记录日志；缓存命中时不受影响�
 1. 仓库内以 Go 实现替换 Cloudflare Workers 实现，删除 `src/`、`test/`、`wrangler.jsonc`、
    `scripts/sync.mjs` 与 KV 同步工作流；旧实现可从 git 历史找回。
 2. 用 `go run ./cmd/manifest` 生成并提交 `manifest.json`。
-3. 用 Docker Compose 部署服务，配置域名或反向代理；现有 VPS 服务在切流前保持不动。
+3. 用 Docker Compose 部署服务，由栈内 Caddy 容器处理 TLS；现有 VPS 服务在切流前保持不动。
 4. 校验线上接口与字节一致性后切换流量，稳定后停用旧服务并回收残留。
 5. 更新 README 与 `.monkeycode/MEMORY.md` 的运维方式。
 
 ## References
 
 [^1]: (Website) - [Go net/http ServeContent](https://pkg.go.dev/net/http#ServeContent)
-[^2]: (Website) - [golang.org/x/crypto/acme/autocert](https://pkg.go.dev/golang.org/x/crypto/acme/autocert)
+[^2]: (Website) - [Caddy reverse_proxy directive](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
 [^3]: (Website) - [golang.org/x/image/webp](https://pkg.go.dev/golang.org/x/image/webp)

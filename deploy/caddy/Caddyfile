@@ -1,0 +1,8 @@
+# Caddyfile for the wallpaper stack. The site address comes from the
+# WALLPAPER_DOMAIN environment variable that docker-compose passes to the
+# container. Caddy obtains and renews the certificate automatically.
+
+{$WALLPAPER_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy wallpaper-api:8080
+}
