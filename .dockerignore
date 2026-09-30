@@ -1,0 +1,7 @@
+.git
+.github
+.monkeycode
+images
+certs
+*.md
+*.log
