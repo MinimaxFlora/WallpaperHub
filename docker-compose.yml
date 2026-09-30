@@ -5,11 +5,12 @@ services:
     container_name: wallpaper-api
     restart: unless-stopped
     ports:
-      # IP/HTTP mode.
+      # IP/HTTP mode. Keep this when a reverse proxy terminates TLS in front.
       - "8080:8080"
-      # Domain/ACME mode needs both ports reachable from the internet.
-      - "80:80"
-      - "443:443"
+      # Domain/ACME mode needs both ports reachable from the internet and no
+      # other service holding them. Uncomment, then set WALLPAPER_DOMAIN.
+      # - "80:80"
+      # - "443:443"
     volumes:
       # Issued certificates are persisted here.
       - certs:/data/certs

@@ -105,8 +105,8 @@ WALLPAPER_SOURCE=local WALLPAPER_MANIFEST_PATH=./manifest.json go run .
 
 ### 域名模式（自动 HTTPS）
 
-1. 把域名解析到服务器，确保 80 与 443 可从公网访问。
-2. 编辑 `docker-compose.yml`，填入域名与邮箱：
+1. 把域名解析到服务器，确保 80 与 443 可从公网访问，且没有其他服务占用这两个端口。
+2. 编辑 `docker-compose.yml`：取消 `80:80` 与 `443:443` 两行端口映射的注释，再填入域名与邮箱：
 
 ```yaml
 WALLPAPER_DOMAIN: wall.example.com
