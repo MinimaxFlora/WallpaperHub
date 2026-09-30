@@ -150,12 +150,34 @@ function valueUrl({ base, account, namespace }, key) {
   return `${base}/accounts/${account}/storage/kv/namespaces/${namespace}/values/${encodeURIComponent(key)}`;
 }
 
+function apiHint(status) {
+  switch (status) {
+    case 401:
+      return "the API token was rejected. CF_API_TOKEN must hold the token secret shown once at creation, not the token ID. Check it has not expired and has the Account > Workers KV Storage > Edit permission.";
+    case 403:
+      return "the token is valid but not permitted here. Grant Account > Workers KV Storage > Edit and scope the token to the account in CF_ACCOUNT_ID.";
+    case 404:
+      return "the endpoint was not found. Check CF_ACCOUNT_ID and that KV_NAMESPACE_ID matches an existing namespace.";
+    case 429:
+      return "request rate limited. The free plan allows 1,000 writes per day to distinct keys; retry later.";
+    default:
+      return null;
+  }
+}
+
+async function ensureOk(response, message) {
+  if (response.ok) return;
+  const body = await response.text();
+  const hint = apiHint(response.status);
+  fail(`${message}: ${response.status} ${body}${hint ? `\n  hint: ${hint}` : ""}`);
+}
+
 async function getRemoteManifest(config) {
   const response = await fetch(valueUrl(config, MANIFEST_KEY), {
     headers: { Authorization: `Bearer ${config.token}` },
   });
   if (response.status === 404) return null;
-  if (!response.ok) fail(`failed to read ${MANIFEST_KEY}: ${response.status} ${await response.text()}`);
+  await ensureOk(response, `failed to read ${MANIFEST_KEY}`);
   return response.json();
 }
 
@@ -169,7 +191,7 @@ async function putRemote(config, key, body, contentType) {
     body,
     headers: { Authorization: `Bearer ${config.token}`, "Content-Type": contentType },
   });
-  if (!response.ok) fail(`failed to upload ${key}: ${response.status} ${await response.text()}`);
+  await ensureOk(response, `failed to upload ${key}`);
 }
 
 function putLocal(key, filePath) {
