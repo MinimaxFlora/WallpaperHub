@@ -10,13 +10,15 @@ Updated: 2026-09-30
 OpenWrt Argon 主题等客户端通过"替换接口地址"的方式使用自有图库：接口响应的
 `images[0].url` 指向本服务的图片地址，客户端解析逻辑无需改动。
 
-图片以仓库 `images/` 目录为唯一数据源，按"日期天数序号对图片总数取模"确定性选图，
-因此同一天同一参数的请求结果稳定可复现，便于客户端与反向代理缓存。
+图片来自可配置的数据源（本地目录或 GitHub 仓库的 `images/` 目录），
+按"日期天数序号对图片总数取模"确定性选图，因此同一天同一参数的请求结果稳定可复现，
+便于客户端与反向代理缓存。
 
 ## Architecture
 
 服务为无状态单进程：启动时构建图片索引，按配置间隔后台重扫；HTTP 层只负责参数解析、
-选图、组装 JSON 与分发静态图片。图片不进镜像，通过只读卷挂载，镜像保持极小。
+选图、组装 JSON 与分发图片。图片通过 `index.Source` 抽象获取，支持本地目录与 GitHub
+仓库两种实现，HTTP 层与数据来源解耦。
 
 服务支持两种监听模式：未配置域名时为 IP 模式，仅启动单个 HTTP 服务；配置域名后进入
 域名模式，额外启动一个 HTTPS 服务，HTTP 服务转为 ACME 校验与跳转。
@@ -24,11 +26,12 @@ OpenWrt Argon 主题等客户端通过"替换接口地址"的方式使用自有�
 ```mermaid
 graph LR
     Client["Argon / 浏览器 / curl"] -->|"GET /HPImageArchive.aspx"| API["Bing 兼容接口"]
-    Client -->|"GET /images/xxx.jpg"| Static["静态图片分发"]
+    Client -->|"GET /images/xxx.jpg"| Static["图片分发"]
     API --> Selector["选图器"]
-    Selector --> Index["图片索引"]
-    Static --> FS["图片目录 (卷挂载)"]
-    Index -. "定时重扫" .-> FS
+    Selector --> Source["index.Source"]
+    Static --> Source
+    Source -->|"local"| FS["本地图片目录"]
+    Source -->|"github"| GH["GitHub 仓库 (tree API + raw 转发)"]
     API --> Meta["元数据组装"]
 ```
 
@@ -48,17 +51,13 @@ graph TD
     Ch -.-> ACME
 ```
 
-部署拓扑（图片不进镜像）：
+部署拓扑（`github` 源，服务器只做转发）：
 
 ```mermaid
 graph LR
-    subgraph Host["宿主机 / NAS"]
-        Repo["仓库 images/ 目录"]
-        Vol["只读卷挂载"]
-        Container["wallpaper-api 容器 (仅二进制)"]
-        Repo --> Vol --> Container
-    end
+    Container["wallpaper-api (VPS / 容器)"]
     Client2["客户端"] -->|"HTTP :8080"| Container
+    Container -->|"tree API 建索引 / raw 取图"| GH2["GitHub 仓库"]
 ```
 
 ## Components and Interfaces
@@ -82,28 +81,71 @@ graph LR
 | `WALLPAPER_ACME_STAGING` | `false` | 是否使用 Let's Encrypt 测试目录 |
 | `WALLPAPER_HTTP_ADDR` | `:80` | 域名模式下的 HTTP 监听地址 |
 | `WALLPAPER_HTTPS_ADDR` | `:443` | 域名模式下的 HTTPS 监听地址 |
+| `WALLPAPER_SOURCE` | `local` | 数据源：`local` 或 `github`；配置了仓库时默认 `github` |
+| `WALLPAPER_GITHUB_REPO` | 空 | GitHub 仓库 `owner/name` |
+| `WALLPAPER_GITHUB_REF` | `master` | 分支、标签或提交 |
+| `WALLPAPER_GITHUB_PATH` | `images` | 仓库内存放壁纸的目录 |
+| `WALLPAPER_GITHUB_TOKEN` | 空 | 可选访问令牌，提高速率限制或访问私有仓库 |
+| `WALLPAPER_GITHUB_REFRESH_INTERVAL` | `15m` | 索引刷新间隔，`0` 表示不刷新 |
+| `WALLPAPER_GITHUB_API_BASE` | `https://api.github.com` | GitHub API 基地址 |
+| `WALLPAPER_GITHUB_RAW_BASE` | `https://raw.githubusercontent.com` | 原始文件基地址 |
 
 ### 图片索引 `index`
 
-职责：递归扫描目录、过滤受支持扩展名、稳定排序、提供只读快照。
+职责：定义统一的图片来源契约，并提供本地目录实现：递归扫描目录、过滤受支持扩展名、
+稳定排序、提供只读快照。
 
 ```go
 type Image struct {
     RelPath string // 相对图片根目录的路径，用作 URL 路径
     Name    string // 文件名（去扩展名），用作 title
+    Size    int64
     ModTime time.Time
 }
 
-type Index struct {
-    images []Image // 按 RelPath 字典序稳定排序
+// Source 是本地目录与 GitHub 两种来源共同实现的契约。
+type Source interface {
+    Snapshot() []Image
+    ServeImage(w http.ResponseWriter, r *http.Request, relPath string)
 }
 
-func (i *Index) Snapshot() []Image // 返回切片快照，避免读写竞争
-func (i *Index) Refresh(root string) error
+type Index struct {
+    snapshot atomic.Pointer[[]Image] // 按 RelPath 字典序稳定排序
+}
+
+func New(dir string) *Index
+func (i *Index) Snapshot() []Image             // 返回切片快照，避免读写竞争
+func (i *Index) Refresh(ctx context.Context) (int, error)
+func (i *Index) ServeImage(w, r, relPath string)
 ```
 
 受支持扩展名：`jpg`、`jpeg`、`png`、`webp`、`gif`、`bmp`、`avif`（大小写不敏感）。
 排序规则固定为 `RelPath` 字典序，保证进程重启后顺序不变。
+
+### GitHub 图片源 `github`
+
+职责：从 GitHub 树接口构建索引，并按需代理转发图片字节（对应需求 11）。
+
+```go
+type Config struct {
+    APIBase, RawBase string // 可配置的 API 与 raw 基地址
+    Repo, Ref, Root  string // 仓库、引用、图片目录
+    Token, UserAgent string
+}
+
+func NewSource(cfg Config, logger *slog.Logger) *Source
+func (s *Source) Snapshot() []Image
+func (s *Source) Refresh(ctx context.Context) (int, error)
+func (s *Source) ServeImage(w, r, relPath string)
+```
+
+- 索引：`GET {APIBase}/repos/{Repo}/git/trees/{Ref}?recursive=1`，过滤 `blob`、受支持扩展名
+  与 `Root` 前缀，得到与本地源一致的 `[]Image`。
+- 转发：`{RawBase}/{Repo}/{Ref}/{Root}/{relPath}`，透传 `If-None-Match`、`If-Modified-Since`、
+  `Range`，回传 `Content-Type`、`Content-Length`、`Content-Range`、`Accept-Ranges`、`ETag`、
+  `Last-Modified`、`Cache-Control`（缺省补 `public, max-age=86400`）。
+- 安全：仅转发当前索引内的路径，未命中的路径返回 404，接口不充当开放代理。
+- 速率：默认 15 分钟刷新一次，远低于未认证 API 每小时 60 次的上限；更频繁或私有仓库时配置 Token。
 
 ### 选图器 `selector`
 
@@ -192,8 +234,8 @@ flowchart TD
     H --> I["输出 JSON + CORS 头"]
 ```
 
-图片分发使用 `http.FileServer` 配合 `http.Dir`，并对请求路径做根目录包含校验，
-拒绝 `..` 跳转与越界路径。
+图片分发委托给 `index.Source`：本地源对请求路径做根目录包含校验，拒绝 `..` 跳转与越界路径，
+再用 `http.ServeFile` 响应；GitHub 源只转发索引内路径，其余一律 404。
 
 ### ACME 模块 `acme`
 
@@ -219,7 +261,8 @@ func NewManager(cfg config.Config) *autocert.Manager
 
 服务无持久化状态，数据模型即内存中的 `Index` 与请求/响应结构。
 
-- `Index`：图片列表快照，由后台 goroutine 周期性重建，读取方通过原子替换获取快照指针。
+- `index.Source`：图片来源契约，本地与 GitHub 两种实现都以原子替换的方式发布图片列表快照。
+- `Image`：单张壁纸的元数据（相对路径、文件名、大小、修改时间）。
 - `BingResponse`：接口响应体，序列化后返回，无状态、可重复生成。
 
 域名模式下唯一的持久化数据是证书缓存目录，由 autocert 以 `DirCache` 格式写入，服务不直接解析其内容。
@@ -235,6 +278,9 @@ func NewManager(cfg config.Config) *autocert.Manager
 7. **模式互斥**：域名列表为空时只启动 HTTP 服务，非空时只启动 HTTPS 与跳转用的 HTTP 服务，不存在请求被重复处理的情况。
 8. **域名白名单**：域名模式下，未配置域名的 TLS 握手必然失败，接口不会对未授权域名返回内容。
 9. **证书复用**：证书缓存目录中存在未过期且匹配域名的证书时，服务直接使用，不触发新的 ACME 签发。
+10. **来源无关**：HTTP 层只依赖 `index.Source`，`local` 与 `github` 两种来源产生相同的接口响应结构。
+11. **无开放代理**：GitHub 源仅转发当前索引内的路径，任意其他路径都返回 404。
+12. **索引可用性**：索引刷新失败时保留上一次成功快照，接口继续以旧索引提供服务。
 
 ## Error Handling
 
@@ -247,6 +293,11 @@ func NewManager(cfg config.Config) *autocert.Manager
 | JSON 序列化失败 | 返回 500，记录错误日志 |
 | 图片目录不存在 | 启动不受影响，后台重扫为空索引，记录告警日志 |
 | 图片目录读取错误 | 保留上一次有效索引，记录错误日志 |
+| GitHub 索引首次拉取失败 | 启动不受影响，以空索引运行，记录告警日志 |
+| GitHub 索引刷新失败 | 保留上一次成功索引，记录错误日志 |
+| GitHub raw 取图失败 | 返回 502，记录错误日志 |
+| 请求路径不在 GitHub 索引内 | 返回 404 |
+| `github` 源未配置仓库 | 启动时报告配置错误并退出 |
 | 域名模式端口被占用 | 对应监听返回错误，进程退出并记录错误日志 |
 | 未配置域名访问 HTTPS | TLS 握手失败并在日志记录 `not configured in HostWhitelist` |
 | 证书无法签发（端口不可达/域名未解析） | TLS 握手失败并记录错误，服务保持运行，缓存修复后自动重试 |
@@ -266,6 +317,8 @@ func NewManager(cfg config.Config) *autocert.Manager
 8. 配置测试：断言域名解析（大小写、协议前缀、去重、逗号分隔）、IP 模式默认值、域名模式 Base URL 推导与显式覆盖。
 9. ACME 测试：断言 `HostPolicy` 接受已配置域名并拒绝其他域名、测试环境开关指向测试目录、`TLSConfig` 同时启用 HTTP/2 与 tls-alpn-01。
 10. 域名模式联调：预置自签证书到缓存目录后启动服务，断言 HTTPS 接口与图片可用、HTTP 普通路径 301 跳转、ACME 挑战路径不被跳转、未授权域名在握手阶段被拒绝。该方式离线验证 HTTPS 链路，无需真实签发证书。
+11. GitHub 源测试：用 `httptest` 伪造 tree API 与 raw 端点，断言索引过滤与排序、刷新失败保留旧索引、索引内路径正常转发且透传缓存头、索引外路径返回 404。
+12. 配置测试补充：断言来源默认值、仅配置仓库时自动切换为 `github`、`github` 源缺少仓库时校验失败。
 
 ## References
 

@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,7 +35,7 @@ func TestRefreshFiltersAndSorts(t *testing.T) {
 	writeFile(t, filepath.Join(root, "nested", "readme.md"), "f")
 
 	ix := New(root)
-	count, err := ix.Refresh()
+	count, err := ix.Refresh(context.Background())
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestRefreshMissingDirKeepsOldSnapshot(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "one.jpg"), "a")
 	ix := New(root)
-	if _, err := ix.Refresh(); err != nil {
+	if _, err := ix.Refresh(context.Background()); err != nil {
 		t.Fatalf("initial Refresh: %v", err)
 	}
 	if ix.Len() != 1 {
@@ -69,7 +70,7 @@ func TestRefreshMissingDirKeepsOldSnapshot(t *testing.T) {
 	}
 
 	missing := New(filepath.Join(root, "does-not-exist"))
-	if _, err := missing.Refresh(); err == nil {
+	if _, err := missing.Refresh(context.Background()); err == nil {
 		t.Fatal("Refresh on missing dir: expected error")
 	}
 	if missing.Len() != 0 {
@@ -80,7 +81,7 @@ func TestRefreshMissingDirKeepsOldSnapshot(t *testing.T) {
 func TestRefreshEmptyDir(t *testing.T) {
 	root := t.TempDir()
 	ix := New(root)
-	count, err := ix.Refresh()
+	count, err := ix.Refresh(context.Background())
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -96,11 +97,11 @@ func TestRefreshReflectsAddedFiles(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "a.jpg"), "a")
 	ix := New(root)
-	if _, err := ix.Refresh(); err != nil {
+	if _, err := ix.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
 	writeFile(t, filepath.Join(root, "b.jpg"), "b")
-	if _, err := ix.Refresh(); err != nil {
+	if _, err := ix.Refresh(context.Background()); err != nil {
 		t.Fatalf("second Refresh: %v", err)
 	}
 	if ix.Len() != 2 {

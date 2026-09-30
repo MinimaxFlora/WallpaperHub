@@ -1,0 +1,41 @@
+[Unit]
+Description=WallpaperHub wallpaper API (Bing-compatible)
+Documentation=https://github.com/MinimaxFlora/WallpaperHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/wallpaper-api
+
+# Plain HTTP on loopback only; TLS and public exposure are handled by Caddy.
+Environment=WALLPAPER_ADDR=127.0.0.1:8080
+Environment=WALLPAPER_BASE_URL=https://wallpaper.kejizero.xyz
+Environment=WALLPAPER_COPYRIGHT=WallpaperHub
+Environment=WALLPAPER_TIMEZONE=Asia/Shanghai
+Environment=WALLPAPER_LOG_LEVEL=info
+# Wallpapers live in the GitHub repository and are proxied by this service.
+Environment=WALLPAPER_SOURCE=github
+Environment=WALLPAPER_GITHUB_REPO=MinimaxFlora/WallpaperHub
+Environment=WALLPAPER_GITHUB_REF=master
+Environment=WALLPAPER_GITHUB_PATH=images
+Environment=WALLPAPER_GITHUB_REFRESH_INTERVAL=15m
+
+ExecStart=/opt/wallpaper-api/wallpaper-api
+Restart=on-failure
+RestartSec=3
+
+# Hardening: the service only reads its image directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

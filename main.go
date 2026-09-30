@@ -15,6 +15,7 @@ import (
 
 	"wallpaper-api/internal/acme"
 	"wallpaper-api/internal/config"
+	"wallpaper-api/internal/github"
 	"wallpaper-api/internal/index"
 	"wallpaper-api/internal/server"
 )
@@ -24,6 +25,10 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(logger)
 
+	if err := cfg.Validate(); err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	logger.Info("starting wallpaper-api", "config", cfg.String())
 
 	if err := run(cfg, logger); err != nil {
@@ -34,23 +39,13 @@ func main() {
 }
 
 func run(cfg config.Config, logger *slog.Logger) error {
-	idx := index.New(cfg.ImagesDir)
-	if count, err := idx.Refresh(); err != nil {
-		logger.Warn("initial image scan failed; starting with an empty index",
-			"dir", cfg.ImagesDir, "error", err)
-	} else {
-		logger.Info("image index built", "dir", cfg.ImagesDir, "count", count)
+	images, stopRefresh, err := buildSource(cfg, logger)
+	if err != nil {
+		return err
 	}
+	defer stopRefresh()
 
-	stopRescan := make(chan struct{})
-	defer close(stopRescan)
-	if cfg.RescanInterval > 0 {
-		go rescanLoop(idx, cfg.RescanInterval, logger, stopRescan)
-	} else {
-		logger.Info("image rescan disabled", "interval", cfg.RescanInterval)
-	}
-
-	handler := server.New(cfg, idx, logger).Handler()
+	handler := server.New(cfg, images, logger).Handler()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -59,6 +54,57 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return runTLS(ctx, cfg, handler, logger)
 	}
 	return runHTTP(ctx, cfg, handler, logger)
+}
+
+// buildSource builds the configured image source and starts its refresh loop.
+// The returned function stops the refresh loop and must be called on shutdown.
+func buildSource(cfg config.Config, logger *slog.Logger) (index.Source, func(), error) {
+	stop := make(chan struct{})
+	stopFn := func() { close(stop) }
+
+	if cfg.UsesGitHub() {
+		src := github.NewSource(github.Config{
+			APIBase:   cfg.GitHubAPIBase,
+			RawBase:   cfg.GitHubRawBase,
+			Repo:      cfg.GitHubRepo,
+			Ref:       cfg.GitHubRef,
+			Root:      cfg.GitHubPath,
+			Token:     cfg.GitHubToken,
+			UserAgent: "wallpaper-api",
+		}, logger)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		count, err := src.Refresh(ctx)
+		cancel()
+		if err != nil {
+			logger.Warn("initial github index fetch failed; starting with an empty index",
+				"repo", cfg.GitHubRepo, "error", err)
+		} else {
+			logger.Info("github image index built",
+				"repo", cfg.GitHubRepo, "ref", cfg.GitHubRef, "path", cfg.GitHubPath, "count", count)
+		}
+
+		if cfg.GitHubRefreshInterval > 0 {
+			go refreshLoop("github", src, cfg.GitHubRefreshInterval, logger, stop)
+		} else {
+			logger.Info("github refresh disabled", "interval", cfg.GitHubRefreshInterval)
+		}
+		return src, stopFn, nil
+	}
+
+	idx := index.New(cfg.ImagesDir)
+	if count, err := idx.Refresh(context.Background()); err != nil {
+		logger.Warn("initial image scan failed; starting with an empty index",
+			"dir", cfg.ImagesDir, "error", err)
+	} else {
+		logger.Info("image index built", "dir", cfg.ImagesDir, "count", count)
+	}
+	if cfg.RescanInterval > 0 {
+		go refreshLoop("local", idx, cfg.RescanInterval, logger, stop)
+	} else {
+		logger.Info("image rescan disabled", "interval", cfg.RescanInterval)
+	}
+	return idx, stopFn, nil
 }
 
 // runHTTP serves plain HTTP. This is the default IP mode used when no domain
@@ -165,7 +211,14 @@ func redirectToHTTPS() http.Handler {
 	})
 }
 
-func rescanLoop(idx *index.Index, interval time.Duration, logger *slog.Logger, stop <-chan struct{}) {
+// refreshableSource is an image source that can rebuild its index.
+type refreshableSource interface {
+	index.Source
+	Refresh(ctx context.Context) (int, error)
+}
+
+// refreshLoop periodically rebuilds an image index until stop is closed.
+func refreshLoop(name string, src refreshableSource, interval time.Duration, logger *slog.Logger, stop <-chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -173,15 +226,17 @@ func rescanLoop(idx *index.Index, interval time.Duration, logger *slog.Logger, s
 		case <-stop:
 			return
 		case <-ticker.C:
-			before := idx.Len()
-			count, err := idx.Refresh()
+			before := len(src.Snapshot())
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			count, err := src.Refresh(ctx)
+			cancel()
 			if err != nil {
-				logger.Error("image rescan failed; keeping previous index",
-					"error", err, "count", before)
+				logger.Error("image index refresh failed; keeping previous index",
+					"source", name, "error", err, "count", before)
 				continue
 			}
 			if count != before {
-				logger.Info("image index refreshed", "count", count)
+				logger.Info("image index refreshed", "source", name, "count", count)
 			}
 		}
 	}

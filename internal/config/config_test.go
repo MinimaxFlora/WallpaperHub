@@ -109,3 +109,45 @@ func TestCustomAddresses(t *testing.T) {
 		t.Fatalf("addrs = %q / %q", cfg.HTTPSAddr, cfg.HTTPAddr)
 	}
 }
+
+func TestSourceDefaultsToLocal(t *testing.T) {
+	t.Setenv("WALLPAPER_SOURCE", "")
+	t.Setenv("WALLPAPER_GITHUB_REPO", "")
+
+	cfg := Load()
+	if cfg.UsesGitHub() {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceLocal)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestRepositoryImpliesGitHubSource(t *testing.T) {
+	t.Setenv("WALLPAPER_SOURCE", "")
+	t.Setenv("WALLPAPER_GITHUB_REPO", "owner/name")
+
+	cfg := Load()
+	if !cfg.UsesGitHub() {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceGitHub)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+	if cfg.GitHubRef != DefaultGitHubRef || cfg.GitHubPath != DefaultGitHubPath {
+		t.Fatalf("github defaults = %q / %q", cfg.GitHubRef, cfg.GitHubPath)
+	}
+	if cfg.GitHubRefreshInterval != DefaultGitHubRefresh {
+		t.Fatalf("GitHubRefreshInterval = %s, want %s", cfg.GitHubRefreshInterval, DefaultGitHubRefresh)
+	}
+}
+
+func TestExplicitGitHubSourceRequiresRepo(t *testing.T) {
+	t.Setenv("WALLPAPER_SOURCE", SourceGitHub)
+	t.Setenv("WALLPAPER_GITHUB_REPO", "")
+
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error when github source has no repository")
+	}
+}

@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,20 +19,20 @@ import (
 // Server wires the HTTP handlers to the configuration and image index.
 type Server struct {
 	cfg      config.Config
-	index    *index.Index
+	images   index.Source
 	renderer bing.Renderer
 	logger   *slog.Logger
 	now      func() time.Time
 }
 
 // New creates a Server.
-func New(cfg config.Config, idx *index.Index, logger *slog.Logger) *Server {
+func New(cfg config.Config, images index.Source, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Server{
 		cfg:      cfg,
-		index:    idx,
+		images:   images,
 		renderer: bing.Renderer{Copyright: cfg.Copyright},
 		logger:   logger,
 		now:      time.Now,
@@ -60,7 +58,7 @@ func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
 	idx := parseOffset(r.URL.Query().Get("idx"))
 	n := parseCount(r.URL.Query().Get("n"))
 
-	images := s.index.Snapshot()
+	images := s.images.Snapshot()
 	resp := bing.Response{Images: make([]bing.Image, 0)}
 
 	if len(images) > 0 {
@@ -92,30 +90,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 
 	rel := strings.TrimPrefix(r.URL.Path, "/images/")
 	rel = strings.TrimPrefix(path.Clean("/"+rel), "/")
-	if rel == "" || strings.Contains(rel, "..") {
-		http.NotFound(w, r)
-		return
-	}
-
-	root, err := filepath.Abs(s.cfg.ImagesDir)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	full := filepath.Join(root, filepath.FromSlash(rel))
-	absFull, err := filepath.Abs(full)
-	if err != nil || (absFull != root && !strings.HasPrefix(absFull, root+string(os.PathSeparator))) {
-		http.NotFound(w, r)
-		return
-	}
-
-	info, err := os.Stat(absFull)
-	if err != nil || info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-
-	http.ServeFile(w, r, absFull)
+	s.images.ServeImage(w, r, rel)
 }
 
 func (s *Server) baseURL(r *http.Request) string {

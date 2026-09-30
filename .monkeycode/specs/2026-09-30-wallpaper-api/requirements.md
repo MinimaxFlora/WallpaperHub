@@ -20,6 +20,9 @@
 - **域名模式**: 配置了域名后的运行模式，服务通过 ACME 自动获取证书并以 HTTPS 提供接口。
 - **ACME**: 自动证书管理协议，服务通过 ACME 向 Let's Encrypt 申请与续期证书。
 - **证书缓存**: 存放已签发证书与 ACME 账户信息的目录，供重启后复用。
+- **Image Source（图片来源）**: 图片索引与图片字节的提供者，可选本地目录（`local`）或 GitHub 仓库（`github`）。
+- **本地源**: 从服务器本地目录递归扫描图片并直接分发的 Image Source。
+- **GitHub 源**: 从 GitHub 仓库读取图片清单、并由本服务代理转发图片字节的 Image Source。
 
 ## Requirements
 
@@ -163,3 +166,21 @@ so that 我不需要手工申请和续期证书。
 7. WHERE 测试环境开关被启用，服务 SHALL 使用 ACME 测试目录签发证书。
 8. The 域名配置项 SHALL 接受逗号分隔的多个域名，并忽略各域名的大小写与协议前缀差异。
 9. The 服务 SHALL 在启动日志中记录当前运行模式与已配置域名。
+
+### Requirement 11: GitHub 图片源
+
+**User Story:** AS 一个运维者，I want 把图片放在 GitHub 仓库并让服务代为转发，
+so that 服务器不占磁盘，加图只需推送文件。
+
+#### Acceptance Criteria
+
+1. The 服务 SHALL 支持通过环境变量选择图片来源，取值为 `local` 或 `github`。
+2. WHEN 仅配置了 GitHub 仓库而未显式指定来源，服务 SHALL 使用 `github` 来源。
+3. WHEN 来源为 `github` 而未配置仓库，服务 SHALL 在启动时报告配置错误并退出。
+4. WHILE 来源为 `github`，服务 SHALL 通过 GitHub 树接口按配置的仓库、引用与目录构建图片索引。
+5. The GitHub 图片索引 SHALL 仅包含扩展名属于受支持集合、且位于配置目录之下的文件。
+6. The 服务 SHALL 按可配置的间隔重新拉取 GitHub 索引；IF 刷新失败，THEN 服务 SHALL 保留上一次成功的索引并记录错误日志。
+7. WHEN 客户端请求 `/images/<相对路径>` 且该路径存在于当前索引，服务 SHALL 从 GitHub 获取图片字节并转发给客户端。
+8. WHEN 客户端请求的图片路径不在当前索引中，服务 SHALL 返回 HTTP 404，服务 SHALL NOT 充当开放代理。
+9. The 服务 SHALL 向 GitHub 源转发请求时透传条件请求与 `Range` 头，并透传上游的 `Content-Type` 与缓存相关响应头。
+10. The 服务 SHALL 支持通过环境变量配置 GitHub API 基地址、原始文件基地址与访问令牌。

@@ -3,7 +3,13 @@
 一个用 Go 1.27 写的自托管壁纸服务，对外提供仿 Bing `HPImageArchive.aspx` 的接口。
 把 OpenWrt Argon 主题的壁纸地址改成这个服务，就能用你自己的图库替换 Bing 官方图源。
 
-图片放在仓库的 `images/` 目录，按服务器日期确定性轮换：同一天、同样参数的请求永远返回同一张图，
+图片可以来自两个数据源，由 `WALLPAPER_SOURCE` 选择：
+
+- `github`（推荐）：图片存放在 GitHub 仓库的 `images/` 目录，服务通过 GitHub 树接口建立索引，
+  再把原始图片字节转发给客户端。客户端只连这台服务器，不占服务器磁盘，加图只需推送文件，无需重启。
+- `local`（默认）：图片放在本地目录，递归扫描后直接分发，适合离线或内网自持场景。
+
+无论哪种数据源，选图都按服务器日期确定性轮换：同一天、同样参数的请求永远返回同一张图，
 结果稳定、可缓存、可复现。
 
 两种运行模式：
@@ -62,6 +68,9 @@
 
 `title` 取文件名去扩展名，`copyright` 为 `标题 (© 配置的版权文案)`。
 
+建议图片按 `01`、`02`、`03` 这样的两位序号命名（如 `01.webp`、`02.webp`），并按加入顺序递增，
+这样字典序即加入顺序，选图轮换的顺序稳定可预期。
+
 ## 配置
 
 全部通过环境变量配置，均有默认值：
@@ -69,11 +78,12 @@
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `WALLPAPER_ADDR` | `:8080` | HTTP 监听地址 |
-| `WALLPAPER_IMAGES_DIR` | `./images` | 图片目录 |
+| `WALLPAPER_SOURCE` | `local` | 数据源：`github` 或 `local`。设置 `WALLPAPER_GITHUB_REPO` 时会自动切换为 `github` |
+| `WALLPAPER_IMAGES_DIR` | `./images` | 本地图片目录，仅 `local` 模式使用 |
 | `WALLPAPER_BASE_URL` | 空 | 图片绝对 URL 前缀；为空时按请求 `Host` 与 `X-Forwarded-Proto` 推导 |
 | `WALLPAPER_COPYRIGHT` | `Wallpaper Collection` | 版权文案 |
 | `WALLPAPER_TIMEZONE` | `Local` | 计算"今天"所用时区，如 `Asia/Shanghai` |
-| `WALLPAPER_RESCAN_INTERVAL` | `60s` | 图片目录重扫间隔，`0` 表示关闭 |
+| `WALLPAPER_RESCAN_INTERVAL` | `60s` | 本地图片目录重扫间隔，仅 `local` 模式使用，`0` 表示关闭 |
 | `WALLPAPER_LOG_LEVEL` | `info` | `debug`、`info`、`warn`、`error` |
 | `WALLPAPER_DOMAIN` | 空 | 域名，可逗号分隔多个。设置后启用 HTTPS 自动证书；为空则是 HTTP/IP 模式 |
 | `WALLPAPER_ACME_EMAIL` | 空 | ACME 账户邮箱，建议填写以便接收证书到期通知 |
@@ -81,6 +91,25 @@
 | `WALLPAPER_ACME_STAGING` | `false` | `true` 时使用 Let's Encrypt 测试环境，避免调试时触发速率限制 |
 | `WALLPAPER_HTTP_ADDR` | `:80` | 仅在域名模式下使用，负责 ACME 校验与跳转 HTTPS |
 | `WALLPAPER_HTTPS_ADDR` | `:443` | 仅在域名模式下使用，提供 HTTPS 服务 |
+| `WALLPAPER_GITHUB_REPO` | 空 | GitHub 仓库，格式 `owner/name`，如 `MinimaxFlora/WallpaperHub` |
+| `WALLPAPER_GITHUB_REF` | `master` | 分支、标签或提交 |
+| `WALLPAPER_GITHUB_PATH` | `images` | 仓库内存放壁纸的目录 |
+| `WALLPAPER_GITHUB_TOKEN` | 空 | 可选。GitHub Token，用于提高 API 速率限制或访问私有仓库 |
+| `WALLPAPER_GITHUB_REFRESH_INTERVAL` | `15m` | 索引刷新间隔，`0` 表示关闭定时刷新 |
+| `WALLPAPER_GITHUB_API_BASE` | `https://api.github.com` | GitHub API 地址，自建或镜像时改这里 |
+| `WALLPAPER_GITHUB_RAW_BASE` | `https://raw.githubusercontent.com` | 原始文件地址，自建或镜像时改这里 |
+
+### GitHub 数据源
+
+`WALLPAPER_SOURCE=github` 时，服务按 `WALLPAPER_GITHUB_REFRESH_INTERVAL` 调用 GitHub 树接口
+（`GET /repos/<repo>/git/trees/<ref>?recursive=1`）建立一次索引，然后按需把图片字节从
+`<raw_base>/<repo>/<ref>/<path>/<文件>` 取回并转发。要点：
+
+- 只有出现在索引里的路径才会被转发，`/images/` 不能当开放代理使用。
+- 条件请求（`If-None-Match`、`If-Modified-Since`）和 `Range` 会透传，客户端可缓存、可断点续传。
+- 未认证的 GitHub API 每个来源每小时限 60 次；15 分钟一次的刷新远低于上限，无需 Token。
+  若提高刷新频率或访问私有仓库，请设置 `WALLPAPER_GITHUB_TOKEN`。
+- 新增图片后，索引会在一个刷新周期内自动更新，无需重启服务。
 
 ## 本地运行
 
@@ -88,16 +117,26 @@
 go run .
 ```
 
-默认读取 `./images`，监听 `:8080`。验证：
+默认读取 `./images`（`local` 模式），监听 `:8080`。验证：
 
 ```bash
 curl -s "http://localhost:8080/HPImageArchive.aspx?format=js&idx=0&n=1"
 ```
 
+改用 GitHub 数据源：
+
+```bash
+WALLPAPER_SOURCE=github \
+WALLPAPER_GITHUB_REPO=MinimaxFlora/WallpaperHub \
+WALLPAPER_GITHUB_REF=master \
+WALLPAPER_GITHUB_PATH=images \
+go run .
+```
+
 ## Docker 部署
 
-图片不打包进镜像：镜像只含静态二进制，图片目录用只读卷挂载。因此加几千张图，
-镜像体积也不变，加图只需更新仓库文件并重启容器（服务也会按 `WALLPAPER_RESCAN_INTERVAL` 自动重扫）。
+镜像只含静态二进制，图片放在 GitHub 仓库里，因此镜像体积与图片数量无关，加图只需推送文件。
+`docker-compose.yml` 默认使用 GitHub 数据源：
 
 ```bash
 docker compose up -d --build
@@ -107,10 +146,13 @@ docker compose up -d --build
 
 ```bash
 docker build -t wallpaper-api:latest .
-docker run -d --name wallpaper-api -p 8080:8080 -v "$PWD/images:/data/images:ro" wallpaper-api:latest
+docker run -d --name wallpaper-api -p 8080:8080 \
+  -e WALLPAPER_SOURCE=github \
+  -e WALLPAPER_GITHUB_REPO=MinimaxFlora/WallpaperHub \
+  wallpaper-api:latest
 ```
 
-容器以非 root 用户运行，请确保挂载的图片目录对该用户可读。
+容器以非 root 用户运行。若改用 `local` 模式，请把图片目录只读挂载进容器并设置 `WALLPAPER_IMAGES_DIR`。
 
 ## HTTPS 自动证书（域名模式）
 
@@ -164,11 +206,12 @@ go test ./...
 main.go                      进程入口、优雅退出、定时重扫
 internal/acme                ACME 自动证书（autocert 封装）
 internal/config              环境变量配置
-internal/index               图片扫描、过滤、排序、原子快照
+internal/index               图片来源接口、本地目录扫描、过滤、排序、原子快照
+internal/github              GitHub 树接口索引与原始图片转发
 internal/selector            日期到图片下标的确定性映射
 internal/bing                Bing 兼容响应与字段组装
 internal/server              路由、接口、图片分发、CORS、访问日志
-images/                      壁纸目录（放进这里即可）
+images/                      壁纸目录（GitHub 数据源时即仓库内的 images/）
 Dockerfile                   多阶段构建，产物为静态二进制
 docker-compose.yml           部署示例
 ```

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,7 +39,7 @@ func newTestServer(t *testing.T, dir string, mutate func(*config.Config)) *Serve
 		mutate(&cfg)
 	}
 	idx := index.New(dir)
-	if _, err := idx.Refresh(); err != nil {
+	if _, err := idx.Refresh(context.Background()); err != nil {
 		t.Fatalf("index refresh: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

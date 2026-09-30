@@ -11,13 +11,20 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # Wallpapers live in the repository and are mounted read-only.
-      - ./images:/data/images:ro
       # Issued certificates are persisted here. The volume inherits ownership
       # from the image, so the unprivileged container user can write to it.
       - certs:/data/certs
     environment:
-      WALLPAPER_IMAGES_DIR: /data/images
+      # Wallpapers are read from a GitHub repository and proxied by the service.
+      WALLPAPER_SOURCE: github
+      WALLPAPER_GITHUB_REPO: MinimaxFlora/WallpaperHub
+      WALLPAPER_GITHUB_REF: master
+      WALLPAPER_GITHUB_PATH: images
+      # Optional token to raise the GitHub API rate limit.
+      WALLPAPER_GITHUB_TOKEN: ""
+      WALLPAPER_GITHUB_REFRESH_INTERVAL: 15m
+      # For a local image directory instead, set WALLPAPER_SOURCE: local,
+      # mount ./images read-only, and set WALLPAPER_IMAGES_DIR: /data/images.
       WALLPAPER_ACME_CACHE_DIR: /data/certs
       # Set to your domain(s) to enable automatic HTTPS. Leave empty for IP/HTTP mode.
       # Example: "wall.example.com" or "wall.example.com,cdn.example.com"
@@ -32,7 +39,6 @@ services:
       WALLPAPER_BASE_URL: ""
       WALLPAPER_COPYRIGHT: My Wallpapers
       WALLPAPER_TIMEZONE: Asia/Shanghai
-      WALLPAPER_RESCAN_INTERVAL: 60s
       WALLPAPER_LOG_LEVEL: info
 
 volumes:
