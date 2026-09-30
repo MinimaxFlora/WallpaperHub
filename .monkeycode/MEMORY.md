@@ -98,3 +98,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - The unauthenticated GitHub tree API allows 60 requests/hour per source; the default 15-minute refresh stays well under it. Increase `WALLPAPER_GITHUB_TOKEN` if refreshing more often or reading a private repository.
   - Only paths present in the current GitHub index are proxied; `/images/` cannot be used as an open proxy.
   - GitHub raw URLs may be blocked in some regions; jsDelivr works as an alternative `WALLPAPER_GITHUB_RAW_BASE`. GitHub Pages was not enabled on the repository.
+
+[Project Knowledge Summary]
+- Date: 2026-09-30
+- Context: Discovered by Agent while debugging a failing sync-kv workflow run
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - `sync-kv` failing on its first remote call with `401 {"code":10000,"message":"Authentication error"}` means the credential is rejected, not that the URL or request is malformed. Before debugging the script, confirm the credential itself.
+  - Isolate token from secret storage by running the same call locally: `CF_API_TOKEN=... CF_ACCOUNT_ID=... KV_NAMESPACE_ID=... node scripts/sync.mjs --target remote`. A local 401 proves the token is bad; a local success proves the GitHub secret value was corrupted on paste (GitHub secrets cannot be read back, so recreate it).
+  - One-shot credential check: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <TOKEN>" "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/storage/kv/namespaces/<NAMESPACE_ID>/keys"`. 200 = all three values correct, 401 = invalid token, 403 = missing `Account > Workers KV Storage > Edit` or wrong account scope, 404 = wrong account or namespace id.
+  - Common cause: pasting the token **ID** instead of the token **secret**. The secret is shown only once at creation; recover by rolling the token or creating a new one.
+  - Account-owned tokens (used when the token was created under Manage Account > Account API Tokens) are not verifiable via `/user/tokens/verify`; test them against a real account-scoped endpoint such as the KV one above.
