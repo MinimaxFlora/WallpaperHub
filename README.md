@@ -3,7 +3,7 @@
 自托管的壁纸 REST API，用 Go 编写。图片存放在 GitHub 仓库，推送后由 GitHub Actions
 重新生成 `manifest.json` 并提交回仓库；服务读取清单，对外提供检索、筛选与四种取图模式，
 图片字节从 GitHub 拉取后写入本地磁盘缓存。用 Docker Compose 部署，TLS 与证书签发交给
-搭配的 Caddy 容器。
+宿主机上的 Caddy 反向代理。
 
 ## 架构
 
@@ -12,8 +12,8 @@ flowchart LR
     A["GitHub Repo"] -->|"push images or metadata"| B["GitHub Actions"]
     B -->|"go run ./cmd/manifest"| C["manifest.json"]
     C -->|"commit back"| A
-    D["Client"] -->|"HTTPS"| G["caddy"]
-    G -->|"reverse proxy"| E["wallpaper-api"]
+    D["Client"] -->|"HTTPS"| G["Caddy on the host"]
+    G -->|"reverse proxy to 127.0.0.1:8080"| E["wallpaper-api container"]
     E -->|"read manifest"| A
     E -->|"fetch and cache bytes"| F["Disk Cache"]
     G -->|"serve"| D
@@ -102,19 +102,19 @@ WALLPAPER_SOURCE=local WALLPAPER_MANIFEST_PATH=./manifest.json go run .
 
 ## Docker Compose 部署
 
-栈里有两个容器：`wallpaper-api` 提供接口，`caddy` 占用 80/443、自动申请续期证书并反向代理到
-API。API 容器不对外暴露端口。默认 `docker-compose.yml` 使用 GitHub 模式，图片直接从
-`MinimaxFlora/WallpaperHub` 拉取。
+Compose 只跑一个容器 `wallpaper-api`，它说纯 HTTP 并只绑定 `127.0.0.1:8080`。TLS 与域名
+由宿主机上的反向代理负责，Caddy 是最省事的选择。这样做是因为一台机器上的 80/443 只有一个
+进程能占用，把证书交给宿主机的 Caddy 才能和其他站点共存。默认 `docker-compose.yml` 使用
+GitHub 模式，图片直接从 `MinimaxFlora/WallpaperHub` 拉取。
 
 ### 域名部署（自动 HTTPS）
 
-1. 把域名解析到服务器，确保 80 与 443 可从公网访问，且没有其他服务占用这两个端口。
-2. 在项目目录创建 `.env`，填入域名和对外地址：
+前提：宿主机已经装了 Caddy，并且 80/443 归它管，这样它可以同时服务所有站点。
+
+1. 把域名解析到服务器。
+2. 在项目目录创建 `.env`，填入对外地址：
 
 ```bash
-# 站点域名，Caddy 据此申请证书
-WALLPAPER_DOMAIN=wall.example.com
-
 # 响应里绝对 URL 的前缀
 WALLPAPER_BASE_URL=https://wall.example.com
 ```
@@ -125,29 +125,30 @@ WALLPAPER_BASE_URL=https://wall.example.com
 docker compose up -d --build
 ```
 
-4. 第一次启动时 Caddy 会申请证书，用 `docker compose logs -f caddy` 观察签发结果。
+4. 在宿主机的 Caddyfile 里加上 wallpaper 站点，Caddy 会自动申请证书并转发到容器：
 
-证书存放在 `caddy_data` 卷，容器重建不会丢失。
+```caddyfile
+wall.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+5. 重载 Caddy 并查看证书签发结果：
+
+```bash
+sudo systemctl reload caddy
+journalctl -u caddy -f
+```
 
 ### 本地试用
 
-不设 `WALLPAPER_DOMAIN` 时默认用 `localhost`，Caddy 会签发本地自签证书，用
-`https://localhost` 访问。也可以只跑 API 容器，用 `docker compose up -d wallpaper-api`
-后通过 `http://localhost:8080` 访问（此时需要在 compose 里临时给 API 加上端口映射）。
+容器把端口发布在 `127.0.0.1:8080`，直接用 `http://localhost:8080` 访问即可。
 
-### 其他站点共用这台 Caddy
+### 用别的反向代理
 
-`caddy` 容器默认加载仓库内的 `deploy/caddy/Caddyfile`，站点地址取自 `WALLPAPER_DOMAIN`。
-如果同一台机器上还有别的站点要挂到这个 Caddy，把 `WALLPAPER_CADDYFILE` 指向服务器上的
-自定义 Caddyfile 即可：
-
-```bash
-# .env
-WALLPAPER_CADDYFILE=/opt/wallpaper-api/caddy/Caddyfile
-```
-
-自定义 Caddyfile 里照抄 wallpaper 站点块，再追加其他站点。若其他站点要读容器外的目录，
-在服务器上放一个 `docker-compose.override.yml` 补充只读挂载。
+nginx、Traefik 等同样可以，只需把域名转发到 `127.0.0.1:8080`，并透传 `X-Forwarded-Proto`
+与 `X-Forwarded-Host`，服务会据此生成响应里的绝对 URL。
 
 ### 本地目录模式
 
@@ -182,13 +183,6 @@ WALLPAPER_MANIFEST_PATH: /data/repo/manifest.json
 | `WALLPAPER_RATELIMIT_WINDOW` | `1m` | 限流窗口 |
 | `WALLPAPER_HOTLINK_ALLOWLIST` | 空 | 允许取图的来源，逗号分隔，支持 `*.example.com`；留空放行全部 |
 | `WALLPAPER_LOG_LEVEL` | `info` | `debug`、`info`、`warn` 或 `error` |
-
-以下变量只影响 Compose 栈的 Caddy 容器，不由 Go 服务读取：
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `WALLPAPER_DOMAIN` | `localhost` | Caddy 站点地址，即证书域名 |
-| `WALLPAPER_CADDYFILE` | `./deploy/caddy/Caddyfile` | Caddy 容器加载的配置文件 |
 
 ## 添加图片
 

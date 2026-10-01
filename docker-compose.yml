@@ -1,32 +1,15 @@
-# Wallpaper API stack: a Caddy container terminates TLS and reverse-proxies to
-# the API container, which never binds a public port itself.
+# The API container speaks plain HTTP and binds loopback only. A reverse proxy
+# on the host (for example the host's Caddy) terminates TLS and forwards the
+# public domain to 127.0.0.1:8080.
 services:
-  caddy:
-    image: caddy:2-alpine
-    container_name: wallpaper-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      # Site address for the Caddyfile, for example wallpaper.example.com.
-      WALLPAPER_DOMAIN: ${WALLPAPER_DOMAIN:-localhost}
-    volumes:
-      # Override with WALLPAPER_CADDYFILE to point at a host-specific Caddyfile.
-      - ${WALLPAPER_CADDYFILE:-./deploy/caddy/Caddyfile}:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - wallpaper-api
-
   wallpaper-api:
     build: .
     image: wallpaper-api:latest
     container_name: wallpaper-api
     restart: unless-stopped
-    expose:
-      - "8080"
+    ports:
+      # Loopback only: never published on a public interface.
+      - "127.0.0.1:8080:8080"
     volumes:
       # Image bytes fetched from GitHub are cached here.
       - cache:/data/cache
@@ -43,8 +26,8 @@ services:
       # For a local checkout instead, set WALLPAPER_SOURCE: local and mount the
       # repository read-only at /data/repo with WALLPAPER_ROOT: /data/repo.
       WALLPAPER_ADDR: ":8080"
-      # Public URL used to build absolute links. Leave empty to derive from the
-      # request's forwarded headers.
+      # Public URL used to build absolute links. Leave empty to derive it from
+      # the proxy's forwarded headers.
       WALLPAPER_BASE_URL: ${WALLPAPER_BASE_URL:-}
       WALLPAPER_TIMEZONE: Asia/Shanghai
       WALLPAPER_RATELIMIT_LIMIT: "120"
@@ -55,6 +38,4 @@ services:
       WALLPAPER_LOG_LEVEL: info
 
 volumes:
-  caddy_data:
-  caddy_config:
   cache:

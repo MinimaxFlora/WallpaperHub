@@ -12,7 +12,7 @@ GitHub Actions 生成清单并提交回仓库；服务读取清单，从 GitHub 
 - 取图规则从「每天固定一张」扩展为随机、种子、按日、会话四种模式，可用参数切换。
 - 图片带标签与分类，支持筛选与检索。
 - 清单由 GitHub Actions 生成并提交，服务不再在运行时扫描目录推算元数据。
-- 部署形态为 Docker Compose，由栈内的 Caddy 容器负责 TLS 证书签发与反向代理，不依赖 Cloudflare。
+- 部署形态为 Docker Compose，由宿主机上的 Caddy 负责 TLS 证书签发与反向代理，不依赖 Cloudflare。
 
 ## Glossary
 
@@ -135,8 +135,8 @@ GitHub Actions 生成清单并提交回仓库；服务读取清单，从 GitHub 
 #### Acceptance Criteria
 
 1. The 服务 SHALL 支持通过 Docker 与 Docker Compose 部署。
-2. The 部署栈 SHALL 由 Caddy 容器对外提供 HTTPS，并把请求反向代理到只监听内网的 API 容器。
-3. The Caddy 容器 SHALL 自动申请并续期站点域名的证书，且证书在容器重建后保持有效。
+2. The 部署方式 SHALL 让宿主机的 Caddy 对外提供 HTTPS，并把请求反向代理到只监听内网的 API 容器，从而与该机器上的其他站点共存。
+3. The 宿主机 Caddy SHALL 自动申请并续期各站点域名的证书。
 4. The 服务 SHALL 通过环境变量声明图片源、仓库、清单位置、缓存目录、公开域名、时区、防盗链白名单与限流参数。
 5. WHERE 某项配置未提供，服务 SHALL 使用安全默认值。
 6. The 服务 SHALL 支持通过环境变量调整限流阈值与窗口长度。
